@@ -1,0 +1,21 @@
+#013E68
+#22C8D3
+#C1E1F6
+
+Gradation background
+29% #FFFFFF
+100 % #22C8D3
+
+font = Konkhmer Sleokchher
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Konkhmer+Sleokchher&display=swap');
+</style>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Konkhmer+Sleokchher&display=swap" rel="stylesheet">
+
+DB_HOST=localhost
+DB_NAME=washhub_db
+DB_USER=root
+DB_PASS=
