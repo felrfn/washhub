@@ -1,4 +1,5 @@
 <?php
+session_start();
 require_once __DIR__ . '/db_connect.php';
 
 // Helper queue number: A001 per tanggal
@@ -32,7 +33,13 @@ try {
 
 // Build map harga paket
 $paketHarga = [];
-foreach ($washPackages as $wp) { $paketHarga[(int)$wp['id']] = (int)($wp['harga'] ?? 0); }
+$paketBySlug = [];
+foreach ($washPackages as $wp) {
+  $id = (int)$wp['id'];
+  $name = strtolower(trim($wp['name'] ?? ''));
+  $paketHarga[$id] = (int)($wp['harga'] ?? 0);
+  if ($name) { $paketBySlug[$name] = $id; }
+}
 
 // Determine step
 $step = $_POST['step'] ?? 'form';
@@ -46,12 +53,37 @@ $state = [
   'time' => $_POST['time'] ?? '',
 ];
 
+// Prefill from layanan link: booking.php?paket=basic|standard|premium (case-insensitive)
+if ($state['wash_package_id'] === 0 && isset($_GET['paket'])) {
+  $q = strtolower(trim($_GET['paket']));
+  if (isset($paketBySlug[$q])) { $state['wash_package_id'] = (int)$paketBySlug[$q]; }
+}
+
 // Normalize plate to uppercase without double spaces
 if ($state['license_plate']) { $state['license_plate'] = strtoupper(preg_replace('/\s+/', ' ', $state['license_plate'])); }
 
 // Validation quick
 function valid_state(array $s): bool {
   return $s['name'] !== '' && $s['phone'] !== '' && $s['vehicle_type_id'] > 0 && $s['license_plate'] !== '' && $s['wash_package_id'] > 0 && $s['date'] !== '' && $s['time'] !== '';
+}
+
+// Load draft from session when returning to form (GET) so fields are prefilled
+if ($_SERVER['REQUEST_METHOD'] !== 'POST' && isset($_SESSION['booking_draft'])) {
+  $draft = $_SESSION['booking_draft'];
+  $state = array_merge($state, [
+    'name' => $draft['name'] ?? '',
+    'phone' => $draft['phone'] ?? '',
+    'vehicle_type_id' => (int)($draft['vehicle_type_id'] ?? 0),
+    'license_plate' => $draft['license_plate'] ?? '',
+    'wash_package_id' => (int)($draft['wash_package_id'] ?? 0),
+    'date' => $draft['date'] ?? '',
+    'time' => $draft['time'] ?? '',
+  ]);
+}
+
+// Persist draft on preview
+if ($step === 'preview' && valid_state($state)) {
+  $_SESSION['booking_draft'] = $state;
 }
 ?>
 <!doctype html>
@@ -60,10 +92,10 @@ function valid_state(array $s): bool {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Booking — WashHub</title>
-  <?php include __DIR__ . '/components/head-resources.php'; ?>
+  <?php include 'components/head-resources.php'; ?>
 </head>
 <body class="min-h-dvh flex flex-col font-display bg-gradient-to-b from-white via-brand-sky to-brand-teal/70 text-brand-dark">
-  <?php include __DIR__ . '/components/header.php'; ?>
+  <?php include 'components/header.php'; ?>
 
   <main class="flex-grow w-full max-w-[500px] md:max-w-4xl mx-auto px-6 py-6 pb-20">
     <div class="flex items-center gap-4 mb-6">
@@ -75,7 +107,8 @@ function valid_state(array $s): bool {
 
     <?php if ($step === 'preview' && valid_state($state)): ?>
       <?php $harga = $paketHarga[$state['wash_package_id']] ?? 0; ?>
-      <div class="grid gap-4 bg-white/70 backdrop-blur-sm rounded-xl p-5 border border-brand-dark/10">
+      <?php $acc = (string)random_int(1000000000, 9999999999999); ?>
+      <form method="post" class="grid gap-4 bg-white/70 backdrop-blur-sm rounded-xl p-5 border border-brand-dark/10">
         <div>
           <div class="font-semibold">Ringkasan</div>
           <div class="text-sm opacity-80">
@@ -96,25 +129,22 @@ function valid_state(array $s): bool {
           </div>
         </div>
 
-        <?php $acc = (string)random_int(1000000000, 9999999999999); ?>
         <div class="rounded-lg border border-brand-dark/20 bg-white p-4">
           <div class="text-sm opacity-80 mb-1">Nomor Tujuan</div>
           <div class="text-xl font-mono tracking-wider select-all"><?php echo chunk_split($acc, 4, ' '); ?></div>
           <div class="text-xs opacity-70 mt-1">Gunakan nomor di atas sesuai metode yang dipilih.</div>
         </div>
 
-        <form method="post" class="mt-2">
-          <?php foreach ($state as $k=>$v): ?>
-            <input type="hidden" name="<?php echo htmlspecialchars($k, ENT_QUOTES, 'UTF-8'); ?>" value="<?php echo htmlspecialchars($v, ENT_QUOTES, 'UTF-8'); ?>" />
-          <?php endforeach; ?>
-          <input type="hidden" name="step" value="pay" />
-          <input type="hidden" name="account_number" value="<?php echo htmlspecialchars($acc, ENT_QUOTES, 'UTF-8'); ?>" />
-          <div class="flex items-center gap-3">
-            <button type="submit" class="rounded-md bg-brand-primary px-5 py-2 font-bold text-white">Bayar</button>
-            <a href="booking.php" class="text-sm underline">Kembali</a>
-          </div>
-        </form>
-      </div>
+        <?php foreach ($state as $k=>$v): ?>
+          <input type="hidden" name="<?php echo htmlspecialchars($k, ENT_QUOTES, 'UTF-8'); ?>" value="<?php echo htmlspecialchars($v, ENT_QUOTES, 'UTF-8'); ?>" />
+        <?php endforeach; ?>
+        <input type="hidden" name="step" value="pay" />
+        <input type="hidden" name="account_number" value="<?php echo htmlspecialchars($acc, ENT_QUOTES, 'UTF-8'); ?>" />
+        <div class="flex items-center gap-3">
+          <button type="submit" class="rounded-md bg-brand-primary px-5 py-2 font-bold text-white">Bayar</button>
+          <a href="booking.php" class="text-sm underline">Kembali</a>
+        </div>
+      </form>
     <?php elseif ($step === 'pay' && valid_state($state)): ?>
       <?php
         try {
@@ -144,6 +174,9 @@ function valid_state(array $s): bool {
           // Harga from paket
           $harga = $paketHarga[$state['wash_package_id']] ?? 0;
 
+          // Clear draft after successful creation
+          unset($_SESSION['booking_draft']);
+
           // Show success UI
         } catch (Throwable $e) {
           echo '<div class="rounded-xl border border-red-300 bg-red-50 p-4 text-red-700">Gagal memproses booking: '.htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8').'</div>';
@@ -164,42 +197,42 @@ function valid_state(array $s): bool {
         <input type="hidden" name="step" value="preview" />
         <div class="grid gap-1">
           <label class="text-sm font-semibold">Nama</label>
-          <input name="name" type="text" required class="rounded-md border border-brand-dark/20 px-3 py-2" placeholder="Nama lengkap" />
+          <input name="name" type="text" required class="rounded-md border border-brand-dark/20 px-3 py-2" placeholder="Nama lengkap" value="<?php echo htmlspecialchars($state['name'] ?? '', ENT_QUOTES, 'UTF-8'); ?>" />
         </div>
         <div class="grid gap-1">
           <label class="text-sm font-semibold">Nomor HP</label>
-          <input name="phone" type="tel" required class="rounded-md border border-brand-dark/20 px-3 py-2" placeholder="08xxxxxxxxxx" />
+          <input name="phone" type="tel" required class="rounded-md border border-brand-dark/20 px-3 py-2" placeholder="08xxxxxxxxxx" value="<?php echo htmlspecialchars($state['phone'] ?? '', ENT_QUOTES, 'UTF-8'); ?>" />
         </div>
         <div class="grid gap-1">
           <label class="text-sm font-semibold">Tipe Mobil</label>
           <select name="vehicle_type_id" class="rounded-md border border-brand-dark/20 px-3 py-2" required>
-            <option value="" disabled selected>Pilih tipe mobil</option>
-            <?php foreach ($vehicleTypes as $vt): ?>
-              <option value="<?php echo (int)$vt['id']; ?>"><?php echo htmlspecialchars($vt['name'], ENT_QUOTES, 'UTF-8'); ?></option>
+            <option value="" disabled <?php echo (($state['vehicle_type_id'] ?? 0)===0)?'selected':''; ?>>Pilih tipe mobil</option>
+            <?php foreach ($vehicleTypes as $vt): $vid=(int)$vt['id']; ?>
+              <option value="<?php echo $vid; ?>" <?php echo ($vid===($state['vehicle_type_id'] ?? 0))?'selected':''; ?>><?php echo htmlspecialchars($vt['name'], ENT_QUOTES, 'UTF-8'); ?></option>
             <?php endforeach; ?>
           </select>
         </div>
         <div class="grid gap-1">
           <label class="text-sm font-semibold">Nomor Plat</label>
-          <input name="license_plate" type="text" required class="rounded-md border border-brand-dark/20 px-3 py-2 uppercase" placeholder="B 1234 XYZ" />
+          <input name="license_plate" type="text" required class="rounded-md border border-brand-dark/20 px-3 py-2 uppercase" placeholder="B 1234 XYZ" value="<?php echo htmlspecialchars($state['license_plate'] ?? '', ENT_QUOTES, 'UTF-8'); ?>" />
         </div>
         <div class="grid gap-1">
           <label class="text-sm font-semibold">Paket Cuci</label>
           <select name="wash_package_id" class="rounded-md border border-brand-dark/20 px-3 py-2" required>
-            <option value="" disabled selected>Pilih paket</option>
-            <?php foreach ($washPackages as $wp): ?>
-              <option value="<?php echo (int)$wp['id']; ?>"><?php echo htmlspecialchars($wp['name'], ENT_QUOTES, 'UTF-8'); ?></option>
+            <option value="" disabled <?php echo (($state['wash_package_id'] ?? 0)===0)?'selected':''; ?>>Pilih paket</option>
+            <?php foreach ($washPackages as $wp): $pid=(int)$wp['id']; ?>
+              <option value="<?php echo $pid; ?>" <?php echo ($pid===($state['wash_package_id'] ?? 0))?'selected':''; ?>><?php echo htmlspecialchars($wp['name'], ENT_QUOTES, 'UTF-8'); ?></option>
             <?php endforeach; ?>
           </select>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="grid gap-1">
             <label class="text-sm font-semibold">Tanggal</label>
-            <input name="date" type="date" required class="rounded-md border border-brand-dark/20 px-3 py-2" />
+            <input name="date" type="date" required class="rounded-md border border-brand-dark/20 px-3 py-2" value="<?php echo htmlspecialchars($state['date'] ?? '', ENT_QUOTES, 'UTF-8'); ?>" />
           </div>
           <div class="grid gap-1">
             <label class="text-sm font-semibold">Jam</label>
-            <input name="time" type="time" required class="rounded-md border border-brand-dark/20 px-3 py-2" />
+            <input name="time" type="time" required class="rounded-md border border-brand-dark/20 px-3 py-2" value="<?php echo htmlspecialchars($state['time'] ?? '', ENT_QUOTES, 'UTF-8'); ?>" />
           </div>
         </div>
         <div class="pt-2">

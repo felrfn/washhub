@@ -42,7 +42,7 @@ try {
   while ($row = $res->fetch_assoc()) { $queue[] = $row; }
 } catch (Throwable $e) { $err = $e->getMessage(); }
 
-// Determine current and next based on status priority
+// Determine current and next based on status priority and exclude 'Selesai'
 $current = null; $next = null;
 $processingIndex = null; $firstPendingIndex = null;
 foreach ($queue as $idx => $row) {
@@ -56,7 +56,6 @@ foreach ($queue as $idx => $row) {
 
 if ($processingIndex !== null) {
   $current = $queue[$processingIndex];
-  // next = first Pending after current index
   for ($i = $processingIndex + 1; $i < count($queue); $i++) {
     if ($queue[$i]['status_cucian'] === 'Pending') { $next = $queue[$i]; break; }
   }
