@@ -23,10 +23,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
   }
 }
 
-// Fetch today's queue
+// Fetch today's queue (semua status termasuk Selesai)
 $queue = [];
+// Backlog (hari sebelumnya yang belum selesai)
+$backlog = [];
 try {
   $conn = db();
+  // Query hari ini
   $stmt = $conn->prepare('SELECT p.id_pendaftaran, p.no_antrian, p.nomor_plat, p.tgl_booking, p.jam_booking, p.status_cucian,
                                  c.nama_customer, c.no_hp,
                                  j.nama_jenis, k.nama_paket
@@ -40,6 +43,21 @@ try {
   $stmt->execute();
   $res = $stmt->get_result();
   while ($row = $res->fetch_assoc()) { $queue[] = $row; }
+
+  // Query backlog (hari sebelumnya belum selesai)
+  $stmt = $conn->prepare('SELECT p.id_pendaftaran, p.no_antrian, p.nomor_plat, p.tgl_booking, p.jam_booking, p.status_cucian,
+                                  c.nama_customer, c.no_hp,
+                                  j.nama_jenis, k.nama_paket
+                           FROM pendaftaran p
+                           JOIN customer c ON c.id_customer = p.id_customer
+                           JOIN jenis_mobil j ON j.id_jenis = p.id_jenis_mobil
+                           JOIN paket_cuci k ON k.id_paket = p.id_paket
+                           WHERE p.tgl_booking < ? AND p.status_cucian <> "Selesai"
+                           ORDER BY p.tgl_booking DESC, p.no_antrian ASC');
+  $stmt->bind_param('s', $today);
+  $stmt->execute();
+  $res = $stmt->get_result();
+  while ($row = $res->fetch_assoc()) { $backlog[] = $row; }
 } catch (Throwable $e) { $err = $e->getMessage(); }
 
 // Determine current and next based on status priority and exclude 'Selesai'
@@ -136,6 +154,7 @@ if ($processingIndex !== null) {
             <th class="text-left p-3">Customer</th>
             <th class="text-left p-3">Jenis</th>
             <th class="text-left p-3">Paket</th>
+            <th class="text-left p-3">Tanggal</th>
             <th class="text-left p-3">Jam</th>
             <th class="text-left p-3">Status</th>
             <th class="text-left p-3">Aksi</th>
@@ -149,6 +168,7 @@ if ($processingIndex !== null) {
             <td class="p-3"><?php echo htmlspecialchars($q['nama_customer'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td class="p-3"><?php echo htmlspecialchars($q['nama_jenis'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td class="p-3"><?php echo htmlspecialchars($q['nama_paket'], ENT_QUOTES, 'UTF-8'); ?></td>
+            <td class="p-3"><?php echo htmlspecialchars($q['tgl_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td class="p-3"><?php echo htmlspecialchars($q['jam_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td class="p-3"><?php echo htmlspecialchars($q['status_cucian'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td class="p-3">
@@ -164,6 +184,39 @@ if ($processingIndex !== null) {
             </td>
           </tr>
           <?php endforeach; ?>
+          <?php if ($backlog): ?>
+          <tr class="bg-brand-dark/5">
+            <td colspan="9" class="p-3 font-semibold">Backlog (Belum Selesai Hari Sebelumnya)</td>
+          </tr>
+          <?php $lastDate = null; foreach ($backlog as $q): ?>
+            <?php if ($lastDate !== $q['tgl_booking']): $lastDate = $q['tgl_booking']; ?>
+              <tr class="bg-brand-teal/15">
+                <td colspan="9" class="p-2 font-semibold">Tanggal: <?php echo htmlspecialchars($q['tgl_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
+              </tr>
+            <?php endif; ?>
+            <tr class="border-t border-brand-dark/10">
+              <td class="p-3 font-mono"><?php echo htmlspecialchars($q['no_antrian'], ENT_QUOTES, 'UTF-8'); ?></td>
+              <td class="p-3"><?php echo htmlspecialchars($q['nomor_plat'], ENT_QUOTES, 'UTF-8'); ?></td>
+              <td class="p-3"><?php echo htmlspecialchars($q['nama_customer'], ENT_QUOTES, 'UTF-8'); ?></td>
+              <td class="p-3"><?php echo htmlspecialchars($q['nama_jenis'], ENT_QUOTES, 'UTF-8'); ?></td>
+              <td class="p-3"><?php echo htmlspecialchars($q['nama_paket'], ENT_QUOTES, 'UTF-8'); ?></td>
+              <td class="p-3"><?php echo htmlspecialchars($q['tgl_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
+              <td class="p-3"><?php echo htmlspecialchars($q['jam_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
+              <td class="p-3"><?php echo htmlspecialchars($q['status_cucian'], ENT_QUOTES, 'UTF-8'); ?></td>
+              <td class="p-3">
+                <form method="post" class="flex items-center gap-2">
+                  <input type="hidden" name="id_pendaftaran" value="<?php echo (int)$q['id_pendaftaran']; ?>" />
+                  <select name="status_cucian" class="rounded-md border border-brand-dark/20 px-2 py-1 text-sm">
+                    <?php foreach (['Pending','Proses','Selesai'] as $st): ?>
+                      <option value="<?php echo $st; ?>" <?php echo $q['status_cucian']===$st?'selected':''; ?>><?php echo $st; ?></option>
+                    <?php endforeach; ?>
+                  </select>
+                  <button name="update_status" value="1" class="rounded-md bg-brand-primary px-3 py-1.5 text-white text-sm font-bold">Simpan</button>
+                </form>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+          <?php endif; ?>
           <?php if (!$queue): ?>
           <tr><td class="p-3" colspan="8">Belum ada antrian hari ini.</td></tr>
           <?php endif; ?>
