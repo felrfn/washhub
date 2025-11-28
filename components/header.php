@@ -6,10 +6,10 @@ $current_page = basename($_SERVER['PHP_SELF']);
 function navActive($page_name, $current_page) {
     if ($page_name === $current_page) {
         // Style jika aktif (Tebal & warna dark brand)
-        return 'text-brand-dark font-extrabold'; 
+    return 'text-brand-dark font-extrabold'; 
     }
     // Style default (Hover effect)
-    return 'hover:text-brand-dark transition-colors'; 
+  return 'text-brand-dark font-bold hover:text-brand-dark transition-colors'; 
 }
 ?>
 

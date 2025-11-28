@@ -94,7 +94,7 @@ if ($step === 'preview' && valid_state($state)) {
   <title>Booking — WashHub</title>
   <?php include 'components/head-resources.php'; ?>
 </head>
-<body class="min-h-dvh flex flex-col font-display bg-gradient-to-b from-white via-brand-sky to-brand-teal/70 text-brand-dark">
+<body class="min-h-dvh flex flex-col font-sans bg-gradient-to-b from-white via-brand-sky to-brand-teal/70 text-brand-dark">
   <?php include 'components/header.php'; ?>
 
   <main class="flex-grow w-full max-w-[500px] md:max-w-4xl mx-auto px-6 py-6 pb-20">

@@ -1,5 +1,41 @@
 <?php
-// Halaman Kontak WashHub
+require_once __DIR__ . '/db_connect.php';
+
+function normalizePhone($number, $format = '0') {
+    $number = preg_replace('/\D/', '', $number);
+
+    if ($format === '0') {
+        if (substr($number, 0, 2) === '62') {
+            return '0' . substr($number, 2);
+        }
+        return $number;
+    }
+
+    if ($format === '62') {
+        if (substr($number, 0, 1) === '0') {
+            return '62' . substr($number, 1);
+        }
+        return $number;
+    }
+
+    return $number;
+}
+
+// Ambil nomor admin dari DB (id_admin = 1) dengan fallback
+$number = "082123123123";
+try {
+  $conn = db();
+  if ($stmt = $conn->prepare('SELECT nomor_hp FROM admin WHERE id_admin = 1 LIMIT 1')) {
+    $stmt->execute();
+    $res = $stmt->get_result();
+    if ($row = $res->fetch_assoc()) {
+      $hp = trim((string)($row['nomor_hp'] ?? ''));
+      if ($hp !== '') { $number = $hp; }
+    }
+  }
+} catch (Throwable $e) {
+  // keep fallback
+}
 ?>
 <!doctype html>
 <html lang="id">
@@ -40,13 +76,13 @@
             WhatsApp
         </h2>
 
-        <a href="https://wa.me/6282131231234" target="_blank" class="bg-brand-dark text-white font-serif text-2xl md:text-3xl font-bold py-3 px-10 rounded-full shadow-[0_4px_15px_rgba(0,51,84,0.4)] hover:scale-105 transition-transform mb-3">
-            082131231234
+        <a href="https://wa.me/<?php echo normalizePhone($number, "62"); ?>" target="_blank" class="bg-brand-dark text-white font-serif text-2xl md:text-3xl font-bold py-3 px-10 rounded-full shadow-[0_4px_15px_rgba(0,51,84,0.4)] hover:scale-105 transition-transform mb-3">
+            <?php echo normalizePhone($number, "0"); ?>
         </a>
         
-        <p class="text-brand-dark font-bold text-sm md:text-base opacity-90">
+        <a href="https://wa.me/<?php echo normalizePhone($number, "62"); ?>" target="_blank"  class="text-brand-dark font-bold text-sm md:text-base opacity-90">
             Start New Chat
-        </p>
+        </a>
 
       </div>
 
@@ -65,7 +101,7 @@
 
           <li class="flex items-center gap-4">
             <i class="fa-solid fa-phone text-lg w-6 text-center text-brand-teal"></i>
-            <span>+62-821-3123-1234</span>
+            <span><?php echo normalizePhone($number, "0"); ?></span>
           </li>
 
           <li class="flex items-center gap-4">
