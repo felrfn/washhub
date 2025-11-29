@@ -23,6 +23,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_status'])) {
   }
 }
 
+// Delete handler
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_pendaftaran'])) {
+  $id = (int)($_POST['id_pendaftaran'] ?? 0);
+  if ($id > 0) {
+    try {
+      $conn = db();
+      $stmt = $conn->prepare('DELETE FROM pendaftaran WHERE id_pendaftaran = ?');
+      $stmt->bind_param('i', $id);
+      $stmt->execute();
+    } catch (Throwable $e) {
+      $err = $e->getMessage();
+    }
+  }
+}
+
 // Fetch today's queue (semua status termasuk Selesai)
 $queue = [];
 // Backlog (hari sebelumnya yang belum selesai)
@@ -38,7 +53,7 @@ try {
                           JOIN jenis_mobil j ON j.id_jenis = p.id_jenis_mobil
                           JOIN paket_cuci k ON k.id_paket = p.id_paket
                           WHERE p.tgl_booking = ?
-                          ORDER BY p.no_antrian ASC');
+                          ORDER BY p.jam_booking ASC, p.no_antrian ASC');
   $stmt->bind_param('s', $today);
   $stmt->execute();
   $res = $stmt->get_result();
@@ -152,77 +167,97 @@ if ($processingIndex !== null) {
             <th class="text-left p-3">No</th>
             <th class="text-left p-3">Plat</th>
             <th class="text-left p-3">Customer</th>
-            <th class="text-left p-3">Jenis</th>
             <th class="text-left p-3">Paket</th>
-            <th class="text-left p-3">Tanggal</th>
-            <th class="text-left p-3">Jam</th>
-            <th class="text-left p-3">Status</th>
-            <th class="text-left p-3">Aksi</th>
           </tr>
         </thead>
         <tbody>
-          <?php foreach ($queue as $q): ?>
-          <tr class="border-t border-brand-dark/10">
+          <?php foreach ($queue as $q): $rowId = 'row_'.$q['id_pendaftaran']; ?>
+          <tr class="border-t border-brand-dark/10 hover:bg-brand-teal/10 cursor-pointer" onclick="toggleRow('<?php echo $rowId; ?>')">
             <td class="p-3 font-mono"><?php echo htmlspecialchars($q['no_antrian'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td class="p-3"><?php echo htmlspecialchars($q['nomor_plat'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td class="p-3"><?php echo htmlspecialchars($q['nama_customer'], ENT_QUOTES, 'UTF-8'); ?></td>
-            <td class="p-3"><?php echo htmlspecialchars($q['nama_jenis'], ENT_QUOTES, 'UTF-8'); ?></td>
             <td class="p-3"><?php echo htmlspecialchars($q['nama_paket'], ENT_QUOTES, 'UTF-8'); ?></td>
-            <td class="p-3"><?php echo htmlspecialchars($q['tgl_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
-            <td class="p-3"><?php echo htmlspecialchars($q['jam_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
-            <td class="p-3"><?php echo htmlspecialchars($q['status_cucian'], ENT_QUOTES, 'UTF-8'); ?></td>
-            <td class="p-3">
-              <form method="post" class="flex items-center gap-2">
-                <input type="hidden" name="id_pendaftaran" value="<?php echo (int)$q['id_pendaftaran']; ?>" />
-                <select name="status_cucian" class="rounded-md border border-brand-dark/20 px-2 py-1 text-sm">
-                  <?php foreach (['Pending','Proses','Selesai'] as $st): ?>
-                    <option value="<?php echo $st; ?>" <?php echo $q['status_cucian']===$st?'selected':''; ?>><?php echo $st; ?></option>
-                  <?php endforeach; ?>
-                </select>
-                <button name="update_status" value="1" class="rounded-md bg-brand-primary px-3 py-1.5 text-white text-sm font-bold">Simpan</button>
-              </form>
+          </tr>
+          <tr id="<?php echo $rowId; ?>" class="hidden border-t border-brand-dark/10 bg-white/70">
+            <td colspan="4" class="p-3">
+              <div class="grid gap-2 md:grid-cols-2">
+                <div class="text-sm">Tanggal: <span class="font-mono"><?php echo htmlspecialchars($q['tgl_booking'], ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="text-sm">Jam: <span class="font-mono"><?php echo htmlspecialchars($q['jam_booking'], ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="text-sm">Status: <span class="font-semibold"><?php echo htmlspecialchars($q['status_cucian'], ENT_QUOTES, 'UTF-8'); ?></span></div>
+                <div class="flex items-center gap-2 mt-2">
+                  <form method="post" class="flex items-center gap-2">
+                    <input type="hidden" name="id_pendaftaran" value="<?php echo (int)$q['id_pendaftaran']; ?>" />
+                    <select name="status_cucian" class="rounded-md border border-brand-dark/20 px-2 py-1 text-sm">
+                      <?php foreach (['Pending','Proses','Selesai'] as $st): ?>
+                        <option value="<?php echo $st; ?>" <?php echo $q['status_cucian']===$st?'selected':''; ?>><?php echo $st; ?></option>
+                      <?php endforeach; ?>
+                    </select>
+                    <button name="update_status" value="1" class="rounded-md bg-brand-primary px-3 py-1.5 text-white text-sm font-bold">Update</button>
+                  </form>
+                  <form method="post" onsubmit="return confirm('Hapus antrian ini?');">
+                    <input type="hidden" name="id_pendaftaran" value="<?php echo (int)$q['id_pendaftaran']; ?>" />
+                    <button name="delete_pendaftaran" value="1" class="rounded-md bg-red-500 px-3 py-1.5 text-white text-sm font-bold">Hapus</button>
+                  </form>
+                </div>
+              </div>
             </td>
           </tr>
           <?php endforeach; ?>
           <?php if ($backlog): ?>
           <tr class="bg-brand-dark/5">
-            <td colspan="9" class="p-3 font-semibold">Backlog (Belum Selesai Hari Sebelumnya)</td>
+            <td colspan="4" class="p-3 font-semibold">Backlog</td>
           </tr>
-          <?php $lastDate = null; foreach ($backlog as $q): ?>
+          <?php $lastDate = null; foreach ($backlog as $q): $rowId = 'backlog_'.$q['id_pendaftaran']; ?>
             <?php if ($lastDate !== $q['tgl_booking']): $lastDate = $q['tgl_booking']; ?>
               <tr class="bg-brand-teal/15">
-                <td colspan="9" class="p-2 font-semibold">Tanggal: <?php echo htmlspecialchars($q['tgl_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
+                <td colspan="4" class="p-2 font-semibold">Tanggal: <?php echo htmlspecialchars($q['tgl_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
               </tr>
             <?php endif; ?>
-            <tr class="border-t border-brand-dark/10">
+            <tr class="border-t border-brand-dark/10 hover:bg-brand-teal/10 cursor-pointer" onclick="toggleRow('<?php echo $rowId; ?>')">
               <td class="p-3 font-mono"><?php echo htmlspecialchars($q['no_antrian'], ENT_QUOTES, 'UTF-8'); ?></td>
               <td class="p-3"><?php echo htmlspecialchars($q['nomor_plat'], ENT_QUOTES, 'UTF-8'); ?></td>
               <td class="p-3"><?php echo htmlspecialchars($q['nama_customer'], ENT_QUOTES, 'UTF-8'); ?></td>
-              <td class="p-3"><?php echo htmlspecialchars($q['nama_jenis'], ENT_QUOTES, 'UTF-8'); ?></td>
               <td class="p-3"><?php echo htmlspecialchars($q['nama_paket'], ENT_QUOTES, 'UTF-8'); ?></td>
-              <td class="p-3"><?php echo htmlspecialchars($q['tgl_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
-              <td class="p-3"><?php echo htmlspecialchars($q['jam_booking'], ENT_QUOTES, 'UTF-8'); ?></td>
-              <td class="p-3"><?php echo htmlspecialchars($q['status_cucian'], ENT_QUOTES, 'UTF-8'); ?></td>
-              <td class="p-3">
-                <form method="post" class="flex items-center gap-2">
-                  <input type="hidden" name="id_pendaftaran" value="<?php echo (int)$q['id_pendaftaran']; ?>" />
-                  <select name="status_cucian" class="rounded-md border border-brand-dark/20 px-2 py-1 text-sm">
-                    <?php foreach (['Pending','Proses','Selesai'] as $st): ?>
-                      <option value="<?php echo $st; ?>" <?php echo $q['status_cucian']===$st?'selected':''; ?>><?php echo $st; ?></option>
-                    <?php endforeach; ?>
-                  </select>
-                  <button name="update_status" value="1" class="rounded-md bg-brand-primary px-3 py-1.5 text-white text-sm font-bold">Simpan</button>
-                </form>
+            </tr>
+            <tr id="<?php echo $rowId; ?>" class="hidden border-t border-brand-dark/10 bg-white/70">
+              <td colspan="4" class="p-3">
+                <div class="grid gap-2 md:grid-cols-2">
+                  <div class="text-sm">Tanggal: <span class="font-mono"><?php echo htmlspecialchars($q['tgl_booking'], ENT_QUOTES, 'UTF-8'); ?></span></div>
+                  <div class="text-sm">Jam: <span class="font-mono"><?php echo htmlspecialchars($q['jam_booking'], ENT_QUOTES, 'UTF-8'); ?></span></div>
+                  <div class="text-sm">Status: <span class="font-semibold"><?php echo htmlspecialchars($q['status_cucian'], ENT_QUOTES, 'UTF-8'); ?></span></div>
+                  <div class="flex items-center gap-2 mt-2">
+                    <form method="post" class="flex items-center gap-2">
+                      <input type="hidden" name="id_pendaftaran" value="<?php echo (int)$q['id_pendaftaran']; ?>" />
+                      <select name="status_cucian" class="rounded-md border border-brand-dark/20 px-2 py-1 text-sm">
+                        <?php foreach (['Pending','Proses','Selesai'] as $st): ?>
+                          <option value="<?php echo $st; ?>" <?php echo $q['status_cucian']===$st?'selected':''; ?>><?php echo $st; ?></option>
+                        <?php endforeach; ?>
+                      </select>
+                      <button name="update_status" value="1" class="rounded-md bg-brand-primary px-3 py-1.5 text-white text-sm font-bold">Update</button>
+                    </form>
+                    <form method="post" onsubmit="return confirm('Hapus antrian ini?');">
+                      <input type="hidden" name="id_pendaftaran" value="<?php echo (int)$q['id_pendaftaran']; ?>" />
+                      <button name="delete_pendaftaran" value="1" class="rounded-md bg-red-500 px-3 py-1.5 text-white text-sm font-bold">Hapus</button>
+                    </form>
+                  </div>
+                </div>
               </td>
             </tr>
           <?php endforeach; ?>
           <?php endif; ?>
           <?php if (!$queue): ?>
-          <tr><td class="p-3" colspan="8">Belum ada antrian hari ini.</td></tr>
+          <tr><td class="p-3" colspan="4">Belum ada antrian hari ini.</td></tr>
           <?php endif; ?>
         </tbody>
       </table>
     </div>
   </main>
+  <script>
+    function toggleRow(id){
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.toggle('hidden');
+    }
+  </script>
 </body>
 </html>

@@ -2,6 +2,10 @@
 session_start();
 require_once __DIR__ . '/db_connect.php';
 
+// Token untuk img.logo.dev: ambil dari ENV LOGO_TOKEN jika ada, fallback hardcode
+$logoToken = getenv('LOGO_TOKEN') ?: 'pk_KmumDwahR9y2kUSSui1Ieg';
+$logoTokenQuery = $logoToken ? ('?token=' . urlencode($logoToken)) : '';
+
 // Helper queue number: A001 per tanggal
 function generate_queue_no(mysqli $conn, string $date): string {
   $stmt = $conn->prepare("SELECT no_antrian FROM pendaftaran WHERE tgl_booking = ? ORDER BY id_pendaftaran DESC LIMIT 1");
@@ -62,9 +66,38 @@ if ($state['wash_package_id'] === 0 && isset($_GET['paket'])) {
 // Normalize plate to uppercase without double spaces
 if ($state['license_plate']) { $state['license_plate'] = strtoupper(preg_replace('/\s+/', ' ', $state['license_plate'])); }
 
-// Validation quick
-function valid_state(array $s): bool {
+// Validation helpers
+function base_valid_state(array $s): bool {
   return $s['name'] !== '' && $s['phone'] !== '' && $s['vehicle_type_id'] > 0 && $s['license_plate'] !== '' && $s['wash_package_id'] > 0 && $s['date'] !== '' && $s['time'] !== '';
+}
+
+function validate_datetime_future(string $date, string $time): array {
+  // Returns [bool ok, string errorMessage]
+  // Accepts YYYY-MM-DD and HH:MM (24h)
+  $date = trim($date);
+  $time = trim($time);
+  // Business hours constraint 09:00-16:00
+  $OPEN_MIN = '09:00';
+  $OPEN_MAX = '16:00';
+  if ($time !== '') {
+    if ($time < $OPEN_MIN || $time > $OPEN_MAX) {
+      return [false, 'Waktu pendaftaran hanya antara 09:00–16:00.'];
+    }
+  }
+  $d = DateTime::createFromFormat('Y-m-d H:i', $date . ' ' . $time);
+  if (!$d) {
+    return [false, 'Tanggal/Waktu tidak valid.'];
+  }
+  $now = new DateTime('now');
+  if ($d < $now) {
+    // If same date but earlier time, give specific message
+    $today = (new DateTime('now'))->format('Y-m-d');
+    if ($date === $today) {
+      return [false, 'Waktu tidak boleh sebelum waktu saat ini.'];
+    }
+    return [false, 'Tanggal tidak boleh sebelum hari ini.'];
+  }
+  return [true, ''];
 }
 
 // Load draft from session when returning to form (GET) so fields are prefilled
@@ -81,10 +114,20 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST' && isset($_SESSION['booking_draft'])) 
   ]);
 }
 
-// Persist draft on preview
-if ($step === 'preview' && valid_state($state)) {
-  $_SESSION['booking_draft'] = $state;
+// Prioritize paket from layanan link over any session draft
+if (isset($_GET['paket'])) {
+  $q = strtolower(trim($_GET['paket']));
+  if (isset($paketBySlug[$q])) { $state['wash_package_id'] = (int)$paketBySlug[$q]; }
 }
+
+// Compute validation states
+$validFields = base_valid_state($state);
+[$validFuture, $dateTimeErr] = validate_datetime_future($state['date'] ?? '', $state['time'] ?? '');
+$canPreview = ($step === 'preview' && $validFields && $validFuture);
+$canPay = ($step === 'pay' && $validFields && $validFuture);
+
+// Persist draft on preview when valid
+if ($canPreview) { $_SESSION['booking_draft'] = $state; }
 ?>
 <!doctype html>
 <html lang="id">
@@ -94,7 +137,7 @@ if ($step === 'preview' && valid_state($state)) {
   <title>Booking — WashHub</title>
   <?php include 'components/head-resources.php'; ?>
 </head>
-<body class="min-h-dvh flex flex-col font-sans bg-gradient-to-b from-white via-brand-sky to-brand-teal/70 text-brand-dark">
+<body class="min-h-dvh flex flex-col font-sans bg-white text-brand-dark">
   <?php include 'components/header.php'; ?>
 
   <main class="flex-grow w-full max-w-[500px] md:max-w-4xl mx-auto px-6 py-6 pb-20">
@@ -105,10 +148,10 @@ if ($step === 'preview' && valid_state($state)) {
       </h1>
     </div>
 
-    <?php if ($step === 'preview' && valid_state($state)): ?>
+    <?php if ($canPreview): ?>
       <?php $harga = $paketHarga[$state['wash_package_id']] ?? 0; ?>
       <?php $acc = (string)random_int(1000000000, 9999999999999); ?>
-      <form method="post" class="grid gap-4 bg-white/70 backdrop-blur-sm rounded-xl p-5 border border-brand-dark/10">
+      <form id="payment-form" method="post" class="grid gap-4">
         <div>
           <div class="font-semibold">Ringkasan</div>
           <div class="text-sm opacity-80">
@@ -119,33 +162,133 @@ if ($step === 'preview' && valid_state($state)) {
         <div class="text-lg font-bold">Total: Rp<?php echo number_format($harga, 0, ',', '.'); ?></div>
         <div>
           <div class="font-semibold mb-2">Pilih Metode Pembayaran</div>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <?php $methods = ['QRIS','BCA','Mandiri','BNI','BRI','BTN','BSI']; foreach ($methods as $m): ?>
-            <label class="flex items-center gap-2 rounded-md border border-brand-dark/20 bg-white px-3 py-2">
-              <input type="radio" name="method" value="<?php echo $m; ?>" required />
-              <span class="text-sm font-semibold"><?php echo $m; ?></span>
-            </label>
+          <?php 
+            $methods = [
+              ['key'=>'QRIS','label'=>'QRIS','logo'=>'./public/qris.png'],
+              ['key'=>'BRI','label'=>'BRI','logo'=>'https://img.logo.dev/bri.co.id' . $logoTokenQuery],
+              ['key'=>'Mandiri','label'=>'Mandiri','logo'=>'https://img.logo.dev/mandiri-capital.co.id' . $logoTokenQuery],
+              ['key'=>'BNI','label'=>'BNI','logo'=>'https://img.logo.dev/bni.co.id' . $logoTokenQuery],
+              ['key'=>'BTN','label'=>'BTN','logo'=>'https://img.logo.dev/btn.co.id' . $logoTokenQuery],
+              ['key'=>'BSI','label'=>'BSI','logo'=>'https://img.logo.dev/bankbsi.co.id' . $logoTokenQuery],
+              ['key'=>'BCA','label'=>'BCA','logo'=>'https://img.logo.dev/bca.co.id' . $logoTokenQuery],
+            ];
+          ?>
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <?php foreach ($methods as $m): ?>
+              <label class="flex items-center gap-3 rounded-md border border-brand-dark/20 bg-white px-3 py-3 cursor-pointer">
+                <input type="radio" name="method" value="<?php echo htmlspecialchars($m['key'], ENT_QUOTES, 'UTF-8'); ?>" required />
+                <?php if ($m['key']==='QRIS'): ?>
+                  <span class="text-sm font-semibold">QRIS</span>
+                <?php elseif (!empty($m['logo'])): ?>
+                  <img src="<?php echo htmlspecialchars($m['logo'], ENT_QUOTES, 'UTF-8'); ?>" alt="<?php echo htmlspecialchars($m['label'], ENT_QUOTES, 'UTF-8'); ?>" class="h-7 w-auto" onerror="this.style.display='none'" />
+                  <span class="text-sm font-semibold hidden md:inline"><?php echo htmlspecialchars($m['label'], ENT_QUOTES, 'UTF-8'); ?></span>
+                <?php else: ?>
+                  <span class="text-sm font-semibold"><?php echo htmlspecialchars($m['label'], ENT_QUOTES, 'UTF-8'); ?></span>
+                <?php endif; ?>
+              </label>
             <?php endforeach; ?>
           </div>
+          <div id="qris-inline" class="mt-3 hidden">
+            <div class="text-sm opacity-80 mb-2">Scan QRIS berikut untuk pembayaran:</div>
+            <div class="flex items-center justify-center">
+              <img src="public/qris.png" alt="QRIS" class="w-56 h-56 object-contain" onerror="this.outerHTML='<div class=\'text-sm opacity-70\'>QRIS image not available</div>'" />
+            </div>
+          </div>
+          <!-- Modal Pay Now -->
+          <div id="paynow-modal" class="fixed inset-0 bg-black/40 backdrop-blur-sm hidden items-center justify-center z-50">
+            <div class="bg-white rounded-xl shadow-xl w-[min(520px,92%)] p-5">
+              <div class="flex items-center gap-3 mb-2">
+                <img src="public/qris.png" alt="QR" class="w-10 h-10 object-contain hidden" id="paynow-qris-icon" />
+                <h3 class="text-lg font-bold">Pay Now!</h3>
+              </div>
+              <p class="text-sm opacity-80 mb-3">Konfirmasi pembayaran untuk metode: <span id="paynow-method" class="font-semibold"></span></p>
+              <div id="paynow-qris" class="hidden mb-4">
+                <div class="text-sm opacity-80 mb-2">Scan QRIS berikut untuk pembayaran:</div>
+                <div class="rounded-lg border border-brand-dark/20 bg-white p-3 flex items-center justify-center">
+                  <img src="public/qris.png" alt="QRIS" class="w-56 h-56 object-contain" onerror="this.outerHTML='<div class=\'text-sm opacity-70\'>QRIS image not available</div>'" />
+                </div>
+              </div>
+              <div id="paynow-target-box" class="rounded-lg border border-brand-dark/20 bg-white p-3 mb-4">
+                <div class="text-xs opacity-70 mb-1">Nomor Tujuan</div>
+                <div id="paynow-target" class="text-base font-mono tracking-wider select-all"><?php echo chunk_split($acc, 4, ' '); ?></div>
+              </div>
+              <div class="flex items-center justify-end gap-2">
+                <button type="button" id="paynow-cancel" class="rounded-md bg-gray-200 px-4 py-2">Batal</button>
+                <button type="button" id="paynow-ok" class="rounded-md bg-brand-primary text-white px-4 py-2 font-bold">OK</button>
+              </div>
+            </div>
+          </div>
+
+          <script>
+            (function(){
+              const form = document.getElementById('payment-form');
+              const radios = document.querySelectorAll('input[name="method"]');
+              const modal = document.getElementById('paynow-modal');
+              const okBtn = document.getElementById('paynow-ok');
+              const cancelBtn = document.getElementById('paynow-cancel');
+              const methodEl = document.getElementById('paynow-method');
+              const qrisIcon = document.getElementById('paynow-qris-icon');
+              const qrisBox = document.getElementById('paynow-qris');
+              const targetBox = document.getElementById('paynow-target-box');
+              const qrisInline = document.getElementById('qris-inline');
+              const nextBtn = document.getElementById('paynow-open');
+              let chosen = null;
+              function openModal(method){
+                chosen = method;
+                methodEl.textContent = method;
+                const isQris = method === 'QRIS';
+                qrisIcon.classList.toggle('hidden', !isQris);
+                qrisBox.classList.toggle('hidden', !isQris);
+                if (targetBox) targetBox.classList.toggle('hidden', isQris);
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+              }
+              function closeModal(){
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+              }
+              radios.forEach(r=>r.addEventListener('change', (e)=>{
+                if (qrisInline) qrisInline.classList.toggle('hidden', e.target.value !== 'QRIS');
+                if (nextBtn) nextBtn.disabled = false;
+                openModal(e.target.value);
+              }));
+              if (nextBtn) {
+                nextBtn.disabled = true;
+                nextBtn.addEventListener('click', ()=>{
+                  const sel = Array.from(radios).find(r=>r.checked)?.value;
+                  if (sel) openModal(sel);
+                });
+              }
+              cancelBtn.addEventListener('click', ()=>{
+                closeModal();
+              });
+              okBtn.addEventListener('click', ()=>{
+                // auto-submit to pay
+                const stepInput = document.createElement('input');
+                stepInput.type = 'hidden'; stepInput.name = 'step'; stepInput.value = 'pay';
+                form.appendChild(stepInput);
+                const accInput = document.createElement('input');
+                accInput.type = 'hidden'; accInput.name = 'account_number'; accInput.value = '<?php echo htmlspecialchars($acc, ENT_QUOTES, 'UTF-8'); ?>';
+                form.appendChild(accInput);
+                closeModal();
+                form.submit();
+              });
+            })();
+          </script>
         </div>
 
-        <div class="rounded-lg border border-brand-dark/20 bg-white p-4">
-          <div class="text-sm opacity-80 mb-1">Nomor Tujuan</div>
-          <div class="text-xl font-mono tracking-wider select-all"><?php echo chunk_split($acc, 4, ' '); ?></div>
-          <div class="text-xs opacity-70 mt-1">Gunakan nomor di atas sesuai metode yang dipilih.</div>
-        </div>
+        <!-- Removed static Nomor Tujuan per request; shown only in modal -->
 
         <?php foreach ($state as $k=>$v): ?>
           <input type="hidden" name="<?php echo htmlspecialchars($k, ENT_QUOTES, 'UTF-8'); ?>" value="<?php echo htmlspecialchars($v, ENT_QUOTES, 'UTF-8'); ?>" />
         <?php endforeach; ?>
-        <input type="hidden" name="step" value="pay" />
-        <input type="hidden" name="account_number" value="<?php echo htmlspecialchars($acc, ENT_QUOTES, 'UTF-8'); ?>" />
-        <div class="flex items-center gap-3">
-          <button type="submit" class="rounded-md bg-brand-primary px-5 py-2 font-bold text-white">Bayar</button>
+        <!-- Actions: Back on left, Next on right -->
+        <div class="flex items-center justify-between gap-3 mt-2">
           <a href="booking.php" class="text-sm underline">Kembali</a>
+          <button type="button" id="paynow-open" class="rounded-md bg-brand-primary px-5 py-2 font-bold text-white">Lanjutkan</button>
         </div>
       </form>
-    <?php elseif ($step === 'pay' && valid_state($state)): ?>
+    <?php elseif ($canPay): ?>
       <?php
         try {
           $conn = db();
@@ -193,7 +336,17 @@ if ($step === 'preview' && valid_state($state)) {
         </div>
       </div>
     <?php else: ?>
-      <form method="post" class="grid gap-4 bg-white/70 backdrop-blur-sm rounded-xl p-5 border border-brand-dark/10">
+      <?php
+        $errorMessage = '';
+        if ($step !== 'form') {
+          if (!$validFields) { $errorMessage = 'Lengkapi semua field wajib.'; }
+          elseif (!$validFuture) { $errorMessage = $dateTimeErr; }
+        }
+      ?>
+      <?php if (!empty($errorMessage)): ?>
+        <div class="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700"><?php echo htmlspecialchars($errorMessage, ENT_QUOTES, 'UTF-8'); ?></div>
+      <?php endif; ?>
+      <form method="post" class="grid gap-4">
         <input type="hidden" name="step" value="preview" />
         <div class="grid gap-1">
           <label class="text-sm font-semibold">Nama</label>
@@ -228,18 +381,102 @@ if ($step === 'preview' && valid_state($state)) {
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div class="grid gap-1">
             <label class="text-sm font-semibold">Tanggal</label>
-            <input name="date" type="date" required class="rounded-md border border-brand-dark/20 px-3 py-2" value="<?php echo htmlspecialchars($state['date'] ?? '', ENT_QUOTES, 'UTF-8'); ?>" />
+            <input id="booking-date" name="date" type="date" required class="rounded-md border border-brand-dark/20 px-3 py-2" min="<?php echo htmlspecialchars(date('Y-m-d'), ENT_QUOTES, 'UTF-8'); ?>" value="<?php echo htmlspecialchars($state['date'] ?? '', ENT_QUOTES, 'UTF-8'); ?>" />
           </div>
           <div class="grid gap-1">
             <label class="text-sm font-semibold">Jam</label>
-            <input name="time" type="time" required class="rounded-md border border-brand-dark/20 px-3 py-2" value="<?php echo htmlspecialchars($state['time'] ?? '', ENT_QUOTES, 'UTF-8'); ?>" />
+            <select id="booking-time" name="time" required class="rounded-md border border-brand-dark/20 px-3 py-2" data-selected="<?php echo htmlspecialchars($state['time'] ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+              <option value="" disabled selected>Pilih jam</option>
+            </select>
+            <div id="booking-time-note" class="text-xs opacity-70"></div>
           </div>
         </div>
-        <div class="pt-2">
+        <div class="flex items-center justify-between gap-3 pt-2">
+          <a href="index.php" class="text-sm underline">Kembali</a>
           <button type="submit" class="rounded-md bg-brand-primary px-5 py-2 font-bold text-white hover:opacity-90">Lanjutkan</button>
         </div>
       </form>
     <?php endif; ?>
   </main>
+  <script>
+    (function(){
+      const dateEl = document.getElementById('booking-date');
+      const timeEl = document.getElementById('booking-time');
+      const noteEl = document.getElementById('booking-time-note');
+      if (!dateEl || !timeEl) return;
+      const pad = n => (n<10?('0'+n):''+n);
+      const toHM = d => pad(d.getHours())+':'+pad(d.getMinutes());
+      const todayStr = (new Date()).toISOString().slice(0,10);
+      const OPEN_MIN = '09:00';
+      const OPEN_MAX = '16:00';
+      const STEP_MIN = 15; // interval menit
+
+      function buildOptions() {
+        const now = new Date();
+        const curHM = toHM(now);
+        const selectedDate = dateEl.value || todayStr;
+        // Hitung threshold min untuk hari terpilih
+        let threshold = OPEN_MIN;
+        if (selectedDate === todayStr) {
+          threshold = (curHM > OPEN_MIN ? curHM : OPEN_MIN);
+          if (threshold > OPEN_MAX) threshold = OPEN_MAX;
+        }
+        // Bersihkan opsi
+        while (timeEl.options.length > 0) timeEl.remove(0);
+        // Placeholder
+        const ph = document.createElement('option');
+        ph.textContent = 'Pilih jam'; ph.value = ''; ph.disabled = true; ph.selected = true;
+        timeEl.appendChild(ph);
+
+        // Generate slot 09:00 - 16:00 setiap 15 menit
+        const [openH, openM] = OPEN_MIN.split(':').map(Number);
+        const [closeH, closeM] = OPEN_MAX.split(':').map(Number);
+        const base = new Date();
+        base.setHours(openH, openM, 0, 0);
+        const end = new Date();
+        end.setHours(closeH, closeM, 0, 0);
+
+        const saved = timeEl.getAttribute('data-selected') || '';
+        let firstEnabledValue = '';
+
+        for (let d = new Date(base); d <= end; d.setMinutes(d.getMinutes() + STEP_MIN)) {
+          const hm = toHM(d);
+          const opt = document.createElement('option');
+          opt.value = hm; opt.textContent = hm;
+          const disabled = (hm < OPEN_MIN) || (hm > OPEN_MAX) || (selectedDate === todayStr && hm < threshold);
+          if (disabled) opt.disabled = true;
+          if (!disabled && !firstEnabledValue) firstEnabledValue = hm;
+          if (saved && saved === hm) opt.selected = true;
+          timeEl.appendChild(opt);
+        }
+
+        // Jika terpilih disabled/placeholder, pilih opsi pertama yang aktif
+        if (!timeEl.value || timeEl.value === '' || timeEl.selectedOptions[0]?.disabled) {
+          if (firstEnabledValue) {
+            timeEl.value = firstEnabledValue;
+          }
+        }
+
+        // Catatan informasi
+        if (selectedDate === todayStr) {
+          if (threshold >= OPEN_MAX) {
+            noteEl.textContent = 'Pendaftaran hari ini telah tutup (buka 09:00–16:00).';
+          } else if (threshold > OPEN_MIN) {
+            noteEl.textContent = 'Slot sebelum '+ threshold +' tidak tersedia untuk hari ini.';
+          } else {
+            noteEl.textContent = '';
+          }
+        } else {
+          noteEl.textContent = '';
+        }
+      }
+
+      // Pastikan min tanggal adalah hari ini
+      if (!dateEl.min) dateEl.min = todayStr;
+      // Build awal dan saat tanggal berubah
+      buildOptions();
+      dateEl.addEventListener('change', buildOptions);
+    })();
+  </script>
 </body>
 </html>
